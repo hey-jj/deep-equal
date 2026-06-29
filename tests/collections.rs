@@ -317,3 +317,17 @@ fn map_duplicate_keys_last_wins() {
         false,
     );
 }
+
+#[test]
+fn set_object_member_vs_loose_primitive_in_b() {
+    // b holds an object plus a string primitive. The object splits off into
+    // leftover, then the b primitive "5" probes leftover after the object
+    // match. Loose coercion makes 5 and "5" equal, strict does not.
+    check_both(
+        "set object member vs loose primitive in b pass",
+        &set(vec![obj(vec![]), n(5.0)]),
+        &set(vec![obj(vec![]), s("5")]),
+        true,
+        false,
+    );
+}

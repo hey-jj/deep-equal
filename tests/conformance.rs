@@ -211,6 +211,26 @@ fn arrays_with_mixed_contents() {
 }
 
 #[test]
+fn loose_coercion_carries_into_nested_containers() {
+    // A string leaf two levels deep must coerce to a number in loose mode.
+    check_both(
+        "deep array string/number coercion",
+        &arr(vec![obj(vec![("a", arr(vec![n(1.0), s("2")]))])]),
+        &arr(vec![obj(vec![("a", arr(vec![s("1"), n(2.0)]))])]),
+        true,
+        false,
+    );
+    // Booleans coerce to numbers inside an array in loose mode.
+    check_both(
+        "array of booleans vs array of numbers",
+        &arr(vec![b(true), b(false)]),
+        &arr(vec![n(1.0), n(0.0)]),
+        true,
+        false,
+    );
+}
+
+#[test]
 fn null_and_undefined() {
     check_both("null and undefined", &NULL, &UNDEF, true, false);
     check_both(
@@ -339,6 +359,22 @@ fn regexen() {
         &regex("abc", "ig"),
         true,
         true,
+    );
+    // The full standard flag set, scrambled, normalizes to the same order.
+    check_both(
+        "regex full flag set, scrambled order",
+        &regex("abc", "gimsuy"),
+        &regex("abc", "yusmig"),
+        true,
+        true,
+    );
+    // Flag sets that differ by one member across the full set stay unequal.
+    check_both(
+        "regex flag sets differ by one member",
+        &regex("abc", "gimsuy"),
+        &regex("abc", "gimsu"),
+        false,
+        false,
     );
 }
 

@@ -93,3 +93,30 @@ fn infinity_strings() {
     assert!(loose(&s("Infinity"), &n(f64::INFINITY)));
     assert!(loose(&s("-Infinity"), &n(f64::NEG_INFINITY)));
 }
+
+#[test]
+fn radix_prefixes_and_sign() {
+    // Octal, binary, leading plus, and exponent all parse like Number(string).
+    assert!(loose(&s("0o17"), &n(15.0)));
+    assert!(loose(&s("0b101"), &n(5.0)));
+    assert!(loose(&s("+5"), &n(5.0)));
+    assert!(loose(&s("1e3"), &n(1000.0)));
+    // Strict never coerces a string to a number.
+    assert!(!strict(&s("0o17"), &n(15.0)));
+    assert!(!strict(&s("+5"), &n(5.0)));
+}
+
+#[test]
+fn non_numeric_strings_reject() {
+    // Underscores are not part of the numeric grammar, so this is NaN.
+    assert!(!loose(&s("1_000"), &n(1000.0)));
+    // A bare radix prefix with no digits is NaN.
+    assert!(!loose(&s("0x"), &n(0.0)));
+}
+
+#[test]
+fn null_does_not_coerce_to_zero() {
+    // null loosely equals only undefined, never the number 0.
+    assert!(!loose(&NULL, &n(0.0)));
+    assert!(!strict(&NULL, &n(0.0)));
+}
