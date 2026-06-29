@@ -318,17 +318,29 @@ fn is_array(v: &Value) -> bool {
 /// keys here, so they compare structurally through their dedicated paths.
 ///
 /// Object keys borrow from the entry. Array index strings are owned because
-/// they are built on the fly. Objects are sorted so two objects with the same
-/// keys in different orders compare equal in a single lockstep walk.
+/// they are built on the fly. Duplicate object keys collapse to the last value,
+/// matching how JavaScript builds an object from a property list. Objects are
+/// sorted so two objects with the same keys in different orders compare equal in
+/// a single lockstep walk.
 fn keys(v: &Value) -> Vec<(Cow<'_, str>, &Value)> {
     match v {
         Value::Object(entries) => {
+            // Sort by key first. A stable sort keeps insertion order within a
+            // run of equal keys, so the final entry in each run is the last
+            // write. Then dedup adjacent keys keeping that last entry.
             let mut pairs: Vec<(Cow<'_, str>, &Value)> = entries
                 .iter()
                 .map(|(k, val)| (Cow::Borrowed(k.as_str()), val))
                 .collect();
             pairs.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
-            pairs
+            let mut out: Vec<(Cow<'_, str>, &Value)> = Vec::with_capacity(pairs.len());
+            for (key, val) in pairs {
+                match out.last_mut() {
+                    Some(last) if last.0 == key => last.1 = val,
+                    _ => out.push((key, val)),
+                }
+            }
+            out
         }
         Value::Array(items) => items
             .iter()
@@ -356,10 +368,18 @@ fn canonical_flags(flags: &str) -> String {
 /// matching, always done loosely because of a quirk in the source algorithm:
 /// the strict flag is dropped when matching object members across sets.
 fn set_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
-    let (ea, eb) = match (a, b) {
+    let (raw_a, raw_b) = match (a, b) {
         (Value::Set(ea), Value::Set(eb)) => (ea, eb),
         _ => return false,
     };
+    // A JavaScript Set holds distinct members. Construction collapses repeated
+    // primitives by SameValueZero. Object members stay distinct because a Set
+    // keys them by reference, which this model does not express, so each is
+    // kept. Compare the deduplicated sizes, not the raw vector lengths.
+    let dedup_a = dedup_set(raw_a);
+    let dedup_b = dedup_set(raw_b);
+    let ea = dedup_a.as_slice();
+    let eb = dedup_b.as_slice();
     if ea.len() != eb.len() {
         return false;
     }
@@ -421,6 +441,28 @@ fn set_same(a: &Value, b: &Value) -> bool {
         (Value::Num(x), Value::Num(y)) => (x.is_nan() && y.is_nan()) || x == y,
         _ => leaf::same_value(a, b),
     }
+}
+
+/// Collapse repeated primitive members of a set, matching how a JavaScript Set
+/// drops duplicate primitives on construction.
+///
+/// Primitives compare by SameValueZero, so `1` appears once and `NaN` appears
+/// once. Object members are kept as is. A real Set keys them by reference, which
+/// this model has no way to express, so two structurally equal objects stay as
+/// two members.
+fn dedup_set(members: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(members.len());
+    for m in members {
+        let already_kept = leaf::is_leaf(m)
+            && out
+                .iter()
+                .any(|kept| leaf::is_leaf(kept) && set_same(kept, m));
+        if already_kept {
+            continue;
+        }
+        out.push(m.clone());
+    }
+    out
 }
 
 /// Find a deep-equal match for `val` among the leftover a-members and consume
@@ -488,10 +530,19 @@ fn set_might_have_loose_prim(a: &[Value], b: &[Value], prim: &Value) -> bool {
 /// with loose coercion in loose mode. Object keys need deep matching, which
 /// honors the strict flag.
 fn map_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
-    let (ea, eb) = match (a, b) {
+    let (raw_a, raw_b) = match (a, b) {
         (Value::Map(ea), Value::Map(eb)) => (ea, eb),
         _ => return false,
     };
+    // A JavaScript Map holds one entry per key. Setting a key twice keeps the
+    // last value. Construction collapses repeated primitive keys by
+    // SameValueZero. Object keys stay distinct because a Map keys them by
+    // reference, which this model does not express. Compare deduplicated sizes,
+    // not raw vector lengths.
+    let dedup_a = dedup_map(raw_a);
+    let dedup_b = dedup_map(raw_b);
+    let ea = dedup_a.as_slice();
+    let eb = dedup_b.as_slice();
     if ea.len() != eb.len() {
         return false;
     }
@@ -544,6 +595,30 @@ fn map_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool
     }
 
     leftover.is_empty()
+}
+
+/// Collapse repeated primitive keys of a map, keeping the last value, matching
+/// how a JavaScript Map builds from an entry list.
+///
+/// Primitive keys compare by SameValueZero. A later assignment to the same key
+/// overwrites the value. Object keys are kept as is because a Map keys them by
+/// reference, which this model has no way to express, so two structurally equal
+/// objects stay as two entries.
+fn dedup_map(entries: &[(Value, Value)]) -> Vec<(Value, Value)> {
+    let mut out: Vec<(Value, Value)> = Vec::with_capacity(entries.len());
+    for (key, val) in entries {
+        if leaf::is_leaf(key) {
+            if let Some(slot) = out
+                .iter_mut()
+                .find(|(k, _)| leaf::is_leaf(k) && set_same(k, key))
+            {
+                slot.1 = val.clone();
+                continue;
+            }
+        }
+        out.push((key.clone(), val.clone()));
+    }
+    out
 }
 
 /// Look up a map value by key using SameValueZero key matching, matching

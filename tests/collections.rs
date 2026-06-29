@@ -277,3 +277,43 @@ fn sets_loose_primitive_fails_in_b() {
 fn set_vs_map() {
     check_both("Set and Map", &set(vec![]), &map(vec![]), false, false);
 }
+
+#[test]
+fn set_duplicate_members_collapse() {
+    // A Set drops repeated primitives, so the size is the distinct count.
+    check_both(
+        "Set with repeated member vs single member",
+        &set(vec![n(1.0), n(1.0), n(1.0)]),
+        &set(vec![n(1.0)]),
+        true,
+        true,
+    );
+    // Distinct counts after collapse stay unequal.
+    check_both(
+        "Set {1,2} vs Set {1,1}",
+        &set(vec![n(1.0), n(2.0)]),
+        &set(vec![n(1.0), n(1.0)]),
+        false,
+        false,
+    );
+}
+
+#[test]
+fn map_duplicate_keys_last_wins() {
+    // A Map keeps one entry per key with the last assigned value.
+    check_both(
+        "Map with repeated key vs single entry",
+        &map(vec![(s("a"), n(1.0)), (s("a"), n(2.0))]),
+        &map(vec![(s("a"), n(2.0))]),
+        true,
+        true,
+    );
+    // The first write is shadowed, so matching the first value fails.
+    check_both(
+        "Map repeated key, last value differs",
+        &map(vec![(s("a"), n(1.0)), (s("a"), n(2.0))]),
+        &map(vec![(s("a"), n(1.0))]),
+        false,
+        false,
+    );
+}

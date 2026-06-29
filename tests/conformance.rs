@@ -62,6 +62,23 @@ fn equal_objects() {
 
     // "-000" and false
     check_both("`false` and `\"-000\"`", &s("-000"), &b(false), true, false);
+
+    // A repeated key collapses to its last value, matching object construction.
+    check_both(
+        "object with repeated key keeps last value",
+        &obj(vec![("a", n(1.0)), ("a", n(2.0))]),
+        &obj(vec![("a", n(2.0))]),
+        true,
+        true,
+    );
+    // The first write is shadowed, so matching the first value fails.
+    check_both(
+        "object repeated key, first value is shadowed",
+        &obj(vec![("a", n(1.0)), ("a", n(2.0))]),
+        &obj(vec![("a", n(1.0))]),
+        false,
+        false,
+    );
 }
 
 #[test]
