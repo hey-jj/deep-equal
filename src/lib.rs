@@ -49,7 +49,6 @@ mod value;
 pub use value::{Options, TypedArrayKind, Value};
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 
 /// Compare two values for deep equality.
 ///
@@ -57,11 +56,10 @@ use std::collections::HashMap;
 /// options. The comparison is symmetric: `deep_equal(a, b, o)` equals
 /// `deep_equal(b, a, o)`.
 ///
-/// Cycles are handled. Two mutually self-referential structures compare as
-/// equal and the call terminates.
+/// A [`Value`] owns its children, so it is always a finite tree. Recursion over
+/// it terminates without a cycle guard.
 pub fn deep_equal(a: &Value, b: &Value, opts: Options) -> bool {
-    let mut channel = Channel::new();
-    internal_deep_equal(a, b, opts, &mut channel)
+    internal_deep_equal(a, b, opts)
 }
 
 /// Compare two values with loose (coercive) leaf equality.
@@ -76,48 +74,6 @@ pub fn deep_equal_loose(a: &Value, b: &Value) -> bool {
 /// Shorthand for [`deep_equal`] with [`Options::STRICT`].
 pub fn deep_equal_strict(a: &Value, b: &Value) -> bool {
     deep_equal(a, b, Options::STRICT)
-}
-
-/// Identity-keyed memo for cycle detection.
-///
-/// Mirrors the JavaScript side channel. It maps each visited node's address to
-/// a sentinel id. When both operands of a pair are already present and mapped
-/// to the same sentinel, they sit on a matching cycle and compare as equal.
-struct Channel {
-    seen: HashMap<usize, usize>,
-    next: usize,
-}
-
-impl Channel {
-    fn new() -> Self {
-        Channel {
-            seen: HashMap::new(),
-            next: 0,
-        }
-    }
-
-    fn has(&self, v: &Value) -> bool {
-        self.seen.contains_key(&addr(v))
-    }
-
-    fn get(&self, v: &Value) -> Option<usize> {
-        self.seen.get(&addr(v)).copied()
-    }
-
-    fn set(&mut self, v: &Value, sentinel: usize) {
-        self.seen.insert(addr(v), sentinel);
-    }
-
-    fn fresh(&mut self) -> usize {
-        let s = self.next;
-        self.next += 1;
-        s
-    }
-}
-
-/// Stable address of a borrowed node, used as its identity.
-fn addr(v: &Value) -> usize {
-    v as *const Value as usize
 }
 
 /// Identity short-circuit comparison for the chosen mode.
@@ -143,8 +99,8 @@ fn leaf_eq(a: &Value, b: &Value, opts: Options) -> bool {
     }
 }
 
-/// The top-level recursive entry, matching `internalDeepEqual`.
-fn internal_deep_equal(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
+/// The top-level recursive entry.
+fn internal_deep_equal(a: &Value, b: &Value, opts: Options) -> bool {
     // Identity short-circuit.
     if identity_eq(a, b, opts) {
         return true;
@@ -160,29 +116,14 @@ fn internal_deep_equal(a: &Value, b: &Value, opts: Options, channel: &mut Channe
         return leaf_eq(a, b, opts);
     }
 
-    // Cycle detection. Pair both operands to a shared sentinel so a later
-    // revisit short-circuits to equal.
-    let has_a = channel.has(a);
-    let has_b = channel.has(b);
-    if has_a && has_b && channel.get(a) == channel.get(b) {
-        return true;
-    }
-    let sentinel = channel.fresh();
-    if !has_a {
-        channel.set(a, sentinel);
-    }
-    if !has_b {
-        channel.set(b, sentinel);
-    }
-
-    obj_equiv(a, b, opts, channel)
+    obj_equiv(a, b, opts)
 }
 
 /// Structural comparison of two non-leaf values, matching `objEquiv`.
 ///
 /// The first failing check returns false. Each gate mirrors a brand or shape
 /// distinction the JavaScript algorithm enforces in the same order.
-fn obj_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
+fn obj_equiv(a: &Value, b: &Value, opts: Options) -> bool {
     // Brand string (Object.prototype.toString). Differing brands are unequal.
     if brand(a) != brand(b) {
         return false;
@@ -256,15 +197,15 @@ fn obj_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool
         if key_a != key_b {
             return false;
         }
-        if !internal_deep_equal(va, vb, opts, channel) {
+        if !internal_deep_equal(va, vb, opts) {
             return false;
         }
     }
 
     // Collections get structural treatment after the key loop.
     match (a, b) {
-        (Value::Set(_), Value::Set(_)) => set_equiv(a, b, opts, channel),
-        (Value::Map(_), Value::Map(_)) => map_equiv(a, b, opts, channel),
+        (Value::Set(_), Value::Set(_)) => set_equiv(a, b, opts),
+        (Value::Map(_), Value::Map(_)) => map_equiv(a, b, opts),
         _ => true,
     }
 }
@@ -367,7 +308,7 @@ fn canonical_flags(flags: &str) -> String {
 /// containment with loose coercion in loose mode. Object members need deep
 /// matching, always done loosely because of a quirk in the source algorithm:
 /// the strict flag is dropped when matching object members across sets.
-fn set_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
+fn set_equiv(a: &Value, b: &Value, opts: Options) -> bool {
     let (raw_a, raw_b) = match (a, b) {
         (Value::Set(ea), Value::Set(eb)) => (ea, eb),
         _ => return false,
@@ -413,13 +354,10 @@ fn set_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool
         if !leaf::is_falsy(val) && !leaf::is_leaf(val) {
             // Object member from b: find a deep match in leftover. The match is
             // forced loose to mirror the source.
-            if !set_take_equal(ea, &mut leftover, val, channel) {
+            if !set_take_equal(ea, &mut leftover, val) {
                 return false;
             }
-        } else if !opts.strict
-            && !set_has(ea, val)
-            && !set_take_equal(ea, &mut leftover, val, channel)
-        {
+        } else if !opts.strict && !set_has(ea, val) && !set_take_equal(ea, &mut leftover, val) {
             return false;
         }
     }
@@ -467,15 +405,10 @@ fn dedup_set(members: &[Value]) -> Vec<Value> {
 
 /// Find a deep-equal match for `val` among the leftover a-members and consume
 /// it. Matching is loose, mirroring the source where the strict flag is lost.
-fn set_take_equal(
-    ea: &[Value],
-    leftover: &mut Vec<usize>,
-    val: &Value,
-    channel: &mut Channel,
-) -> bool {
+fn set_take_equal(ea: &[Value], leftover: &mut Vec<usize>, val: &Value) -> bool {
     if let Some(pos) = leftover
         .iter()
-        .position(|&i| internal_deep_equal(&ea[i], val, Options::LOOSE, channel))
+        .position(|&i| internal_deep_equal(&ea[i], val, Options::LOOSE))
     {
         leftover.remove(pos);
         true
@@ -529,7 +462,7 @@ fn set_might_have_loose_prim(a: &[Value], b: &[Value], prim: &Value) -> bool {
 /// Maps compare by entries, order independent. Primitive keys look up directly
 /// with loose coercion in loose mode. Object keys need deep matching, which
 /// honors the strict flag.
-fn map_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
+fn map_equiv(a: &Value, b: &Value, opts: Options) -> bool {
     let (raw_a, raw_b) = match (a, b) {
         (Value::Map(ea), Value::Map(eb)) => (ea, eb),
         _ => return false,
@@ -556,14 +489,14 @@ fn map_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool
         } else {
             let item2 = map_get(eb, key);
             let matched = match item2 {
-                Some(v) => internal_deep_equal(item1, v, opts, channel),
+                Some(v) => internal_deep_equal(item1, v, opts),
                 None => false,
             };
             if !matched {
                 if opts.strict {
                     return false;
                 }
-                if !map_might_have_loose_prim(ea, eb, key, item1, channel) {
+                if !map_might_have_loose_prim(ea, eb, key, item1) {
                     return false;
                 }
                 leftover.push(i);
@@ -578,17 +511,15 @@ fn map_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool
     for (key, item2) in eb.iter() {
         if !leaf::is_falsy(key) && !leaf::is_leaf(key) {
             // Object key from b: honor the strict flag.
-            if !map_take_equal_entry(ea, &mut leftover, key, item2, opts, channel) {
+            if !map_take_equal_entry(ea, &mut leftover, key, item2, opts) {
                 return false;
             }
         } else if !opts.strict {
             let direct = match map_get(ea, key) {
-                Some(v) => internal_deep_equal(v, item2, opts, channel),
+                Some(v) => internal_deep_equal(v, item2, opts),
                 None => false,
             };
-            if !direct
-                && !map_take_equal_entry(ea, &mut leftover, key, item2, Options::LOOSE, channel)
-            {
+            if !direct && !map_take_equal_entry(ea, &mut leftover, key, item2, Options::LOOSE) {
                 return false;
             }
         }
@@ -642,7 +573,6 @@ fn map_might_have_loose_prim(
     b: &[(Value, Value)],
     prim: &Value,
     item: &Value,
-    channel: &mut Channel,
 ) -> bool {
     match find_loose_matching_primitives(prim) {
         LoosePrim::Direct(v) => v,
@@ -650,14 +580,14 @@ fn map_might_have_loose_prim(
             // Look up the entry under the nullish alternate key.
             let cur_b = map_get(b, &alt);
             let ok_b = match cur_b {
-                Some(v) => internal_deep_equal(item, v, Options::LOOSE, channel),
+                Some(v) => internal_deep_equal(item, v, Options::LOOSE),
                 None => false,
             };
             if !ok_b {
                 return false;
             }
             let cur = cur_b.expect("cur_b is Some after ok_b");
-            !map_has(a, &alt) && internal_deep_equal(item, cur, Options::LOOSE, channel)
+            !map_has(a, &alt) && internal_deep_equal(item, cur, Options::LOOSE)
         }
     }
 }
@@ -670,11 +600,10 @@ fn map_take_equal_entry(
     key: &Value,
     item2: &Value,
     opts: Options,
-    channel: &mut Channel,
 ) -> bool {
     if let Some(pos) = leftover.iter().position(|&i| {
         let (k2, v2) = &ea[i];
-        internal_deep_equal(key, k2, opts, channel) && internal_deep_equal(item2, v2, opts, channel)
+        internal_deep_equal(key, k2, opts) && internal_deep_equal(item2, v2, opts)
     }) {
         leftover.remove(pos);
         true

@@ -1,11 +1,8 @@
-//! Cycle handling and recursion depth.
+//! Recursion depth and termination.
 //!
-//! The comparator carries an identity-keyed side channel so revisiting the same
-//! node pair short-circuits to equal. The value model owns its children, so a
-//! true self-reference cannot be constructed here. These tests confirm the
-//! comparator terminates on deep finite structures and decides them correctly.
-//! The side-channel logic is the same one that lets mutually recursive graphs
-//! terminate.
+//! A `Value` owns its children, so it is always a finite tree. A self-reference
+//! cannot be constructed. These tests confirm the comparator terminates on deep
+//! finite structures and decides them correctly.
 
 mod common;
 
