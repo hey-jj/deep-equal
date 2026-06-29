@@ -433,24 +433,25 @@ fn set_take_equal(
 
 /// The loose-primitive table, matching `findLooseMatchingPrimitives`.
 ///
-/// Returns whether a loose match might exist for a primitive, or a signal to
-/// look up the `undefined`/`null` alternate. The three outcomes are encoded as
-/// `LoosePrim`.
+/// A primitive either yields a direct yes/no for whether a loose match might
+/// exist, or it signals to retry with a nullish alternate key. `null` and
+/// `undefined` are loosely equal, so each is retried as the other.
 enum LoosePrim {
-    /// No alternative. Bail using the primitive directly.
-    Bail,
-    /// Treat as the loose alternate key (used only for `null`).
-    Alt,
-    /// A direct yes or no for whether a loose match might exist.
+    /// A direct answer: a loose match cannot exist beyond what is already
+    /// known. Carries the result the caller returns.
     Direct(bool),
+    /// Retry with this nullish alternate key. `undefined` retries as `null`,
+    /// `null` retries as `undefined`.
+    Alt(Value),
 }
 
 /// Classify a primitive for loose matching.
 fn find_loose_matching_primitives(prim: &Value) -> LoosePrim {
     match prim {
-        Value::Undefined => LoosePrim::Bail,
-        // Only null reaches the object branch in JavaScript.
-        Value::Null => LoosePrim::Alt,
+        // undefined retries as null.
+        Value::Undefined => LoosePrim::Alt(Value::Null),
+        // null retries as undefined.
+        Value::Null => LoosePrim::Alt(Value::Undefined),
         // Strings and numbers match loosely only when they coerce to a non-NaN
         // number. The test is `+prim === +prim`.
         Value::Str(_) | Value::Num(_) => LoosePrim::Direct(!leaf::to_number(prim).is_nan()),
@@ -466,12 +467,7 @@ fn find_loose_matching_primitives(prim: &Value) -> LoosePrim {
 fn set_might_have_loose_prim(a: &[Value], b: &[Value], prim: &Value) -> bool {
     match find_loose_matching_primitives(prim) {
         LoosePrim::Direct(v) => v,
-        LoosePrim::Bail => false,
-        LoosePrim::Alt => {
-            // Alternate key is `undefined`. Look for undefined in b but not a.
-            let alt = Value::Undefined;
-            set_has(b, &alt) && !set_has(a, &alt)
-        }
+        LoosePrim::Alt(alt) => set_has(b, &alt) && !set_has(a, &alt),
     }
 }
 
@@ -564,10 +560,8 @@ fn map_might_have_loose_prim(
 ) -> bool {
     match find_loose_matching_primitives(prim) {
         LoosePrim::Direct(v) => v,
-        LoosePrim::Bail => false,
-        LoosePrim::Alt => {
-            // Alternate key is `undefined`.
-            let alt = Value::Undefined;
+        LoosePrim::Alt(alt) => {
+            // Look up the entry under the nullish alternate key.
             let cur_b = map_get(b, &alt);
             let ok_b = match cur_b {
                 Some(v) => internal_deep_equal(item, v, Options::LOOSE, channel),
@@ -576,7 +570,7 @@ fn map_might_have_loose_prim(
             if !ok_b {
                 return false;
             }
-            let cur = cur_b.unwrap();
+            let cur = cur_b.expect("cur_b is Some after ok_b");
             !map_has(a, &alt) && internal_deep_equal(item, cur, Options::LOOSE, channel)
         }
     }
