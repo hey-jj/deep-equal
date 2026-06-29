@@ -7,14 +7,14 @@
 mod common;
 
 use common::*;
-use deep_equal::{TaKind, Value};
+use deep_equal::{TypedArrayKind, Value};
 
 #[test]
 fn typed_array_same_contents() {
     check_both(
         "two Uint8Arrays with the same contents",
-        &ta(TaKind::Uint8, vec![1, 2, 3]),
-        &ta(TaKind::Uint8, vec![1, 2, 3]),
+        &ta(TypedArrayKind::Uint8, vec![1, 2, 3]),
+        &ta(TypedArrayKind::Uint8, vec![1, 2, 3]),
         true,
         true,
     );
@@ -24,8 +24,8 @@ fn typed_array_same_contents() {
 fn typed_array_different_contents() {
     check_both(
         "two Uint8Arrays with different contents",
-        &ta(TaKind::Uint8, vec![1, 2, 3]),
-        &ta(TaKind::Uint8, vec![1, 2, 4]),
+        &ta(TypedArrayKind::Uint8, vec![1, 2, 3]),
+        &ta(TypedArrayKind::Uint8, vec![1, 2, 4]),
         false,
         false,
     );
@@ -35,8 +35,8 @@ fn typed_array_different_contents() {
 fn typed_array_length_diff() {
     check_both(
         "typed arrays of different length",
-        &ta(TaKind::Uint8, vec![1, 2, 3]),
-        &ta(TaKind::Uint8, vec![1, 2]),
+        &ta(TypedArrayKind::Uint8, vec![1, 2, 3]),
+        &ta(TypedArrayKind::Uint8, vec![1, 2]),
         false,
         false,
     );
@@ -48,8 +48,8 @@ fn typed_array_kind_mismatch() {
     // them, so they are not equal.
     check_both(
         "Int8Array and Uint8Array with the same bytes",
-        &ta(TaKind::Int8, vec![0; 10]),
-        &ta(TaKind::Uint8, vec![0; 10]),
+        &ta(TypedArrayKind::Int8, vec![0; 10]),
+        &ta(TypedArrayKind::Uint8, vec![0; 10]),
         false,
         false,
     );

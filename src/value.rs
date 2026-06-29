@@ -48,7 +48,7 @@ pub enum Value {
     /// separates them.
     TypedArray {
         /// Which typed array brand this is.
-        kind: TaKind,
+        kind: TypedArrayKind,
         /// The raw bytes.
         bytes: Vec<u8>,
     },
@@ -63,7 +63,7 @@ pub enum Value {
 /// JavaScript's `whichTypedArray` returns the constructor name. Two typed
 /// arrays with different brands are never equal, even with identical bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaKind {
+pub enum TypedArrayKind {
     /// `Int8Array`.
     Int8,
     /// `Uint8Array`.

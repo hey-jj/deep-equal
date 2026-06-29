@@ -46,7 +46,7 @@
 mod leaf;
 mod value;
 
-pub use value::{Options, TaKind, Value};
+pub use value::{Options, TypedArrayKind, Value};
 
 use std::collections::HashMap;
 
@@ -119,14 +119,33 @@ fn addr(v: &Value) -> usize {
     v as *const Value as usize
 }
 
-/// The top-level recursive entry, matching `internalDeepEqual`.
-fn internal_deep_equal(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
-    // Identity short-circuit. Strict uses SameValue, loose uses `===`.
-    if if opts.strict {
+/// Identity short-circuit comparison for the chosen mode.
+///
+/// Strict uses SameValue, so `NaN` short-circuits as equal. Loose uses `===`,
+/// so `NaN` does not. This is the gate at the top of the recursion.
+fn identity_eq(a: &Value, b: &Value, opts: Options) -> bool {
+    if opts.strict {
         leaf::same_value(a, b)
     } else {
         leaf::strict_eq(a, b)
-    } {
+    }
+}
+
+/// Leaf comparison for the chosen mode.
+///
+/// Strict uses SameValue. Loose uses coercive `==`.
+fn leaf_eq(a: &Value, b: &Value, opts: Options) -> bool {
+    if opts.strict {
+        leaf::same_value(a, b)
+    } else {
+        leaf::loose_eq(a, b)
+    }
+}
+
+/// The top-level recursive entry, matching `internalDeepEqual`.
+fn internal_deep_equal(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool {
+    // Identity short-circuit.
+    if identity_eq(a, b, opts) {
         return true;
     }
 
@@ -137,11 +156,7 @@ fn internal_deep_equal(a: &Value, b: &Value, opts: Options, channel: &mut Channe
 
     // Leaf comparison: either operand falsy, or neither is an object.
     if leaf::is_falsy(a) || leaf::is_falsy(b) || (leaf::is_leaf(a) && leaf::is_leaf(b)) {
-        return if opts.strict {
-            leaf::same_value(a, b)
-        } else {
-            leaf::loose_eq(a, b)
-        };
+        return leaf_eq(a, b, opts);
     }
 
     // Cycle detection. Pair both operands to a shared sentinel so a later
@@ -280,17 +295,17 @@ fn brand(v: &Value) -> &'static str {
         Value::Regex { .. } => "[object RegExp]",
         // Typed arrays each report their own brand string.
         Value::TypedArray { kind, .. } => match kind {
-            TaKind::Int8 => "[object Int8Array]",
-            TaKind::Uint8 => "[object Uint8Array]",
-            TaKind::Uint8Clamped => "[object Uint8ClampedArray]",
-            TaKind::Int16 => "[object Int16Array]",
-            TaKind::Uint16 => "[object Uint16Array]",
-            TaKind::Int32 => "[object Int32Array]",
-            TaKind::Uint32 => "[object Uint32Array]",
-            TaKind::Float32 => "[object Float32Array]",
-            TaKind::Float64 => "[object Float64Array]",
-            TaKind::BigInt64 => "[object BigInt64Array]",
-            TaKind::BigUint64 => "[object BigUint64Array]",
+            TypedArrayKind::Int8 => "[object Int8Array]",
+            TypedArrayKind::Uint8 => "[object Uint8Array]",
+            TypedArrayKind::Uint8Clamped => "[object Uint8ClampedArray]",
+            TypedArrayKind::Int16 => "[object Int16Array]",
+            TypedArrayKind::Uint16 => "[object Uint16Array]",
+            TypedArrayKind::Int32 => "[object Int32Array]",
+            TypedArrayKind::Uint32 => "[object Uint32Array]",
+            TypedArrayKind::Float32 => "[object Float32Array]",
+            TypedArrayKind::Float64 => "[object Float64Array]",
+            TypedArrayKind::BigInt64 => "[object BigInt64Array]",
+            TypedArrayKind::BigUint64 => "[object BigUint64Array]",
         },
         Value::ArrayBuffer(_) => "[object ArrayBuffer]",
         Value::SharedArrayBuffer(_) => "[object SharedArrayBuffer]",

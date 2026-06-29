@@ -7,7 +7,7 @@
 
 #![allow(dead_code)]
 
-use deep_equal::{deep_equal, Options, TaKind, Value};
+use deep_equal::{deep_equal, Options, TypedArrayKind, Value};
 
 /// Assert a case in both modes and both directions.
 ///
@@ -81,7 +81,7 @@ pub fn regex(source: &str, flags: &str) -> Value {
     }
 }
 
-pub fn ta(kind: TaKind, bytes: Vec<u8>) -> Value {
+pub fn ta(kind: TypedArrayKind, bytes: Vec<u8>) -> Value {
     Value::TypedArray { kind, bytes }
 }
 
