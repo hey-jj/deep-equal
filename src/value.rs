@@ -1,11 +1,10 @@
 //! Value model.
 //!
 //! JavaScript values are dynamically typed. The equality algorithm branches on
-//! the runtime kind of each operand: boxed primitive, arguments object, typed
-//! array, `Map`, `Set`, `Date`, `RegExp`, prototype chain, and the loose `==`
-//! coercion rules. To reproduce that behavior in Rust we model the value space
-//! with an explicit enum. Each variant maps to a JavaScript value kind the
-//! algorithm distinguishes.
+//! the runtime kind of each operand: typed array, `Map`, `Set`, `Date`,
+//! `RegExp`, and the loose `==` coercion rules. To reproduce that behavior in
+//! Rust we model the value space with an explicit enum. Each variant maps to a
+//! JavaScript value kind the algorithm distinguishes.
 
 /// A JavaScript runtime value.
 ///
@@ -13,6 +12,22 @@
 /// treats differently. Numbers use `f64` so `NaN`, `+0`, `-0`, and the
 /// infinities are all representable and distinguishable where the algorithm
 /// cares.
+///
+/// `Value` does not implement `PartialEq` on purpose. A derived `==` would be
+/// structural and would disagree with this crate's whole point. [`deep_equal`]
+/// ignores key order, coerces leaves in loose mode, canonicalizes regex flags,
+/// and matches `Map` and `Set` members order independent. A derived `==` would
+/// do none of that. Compare values with [`deep_equal`], [`deep_equal_loose`],
+/// or [`deep_equal_strict`].
+///
+/// This enum is exhaustive. You can match it without a wildcard arm. The crate
+/// treats adding a variant as a breaking change rather than hiding it behind
+/// `#[non_exhaustive]`, because building and matching `Value` is the primary use
+/// and a forced wildcard would cost every caller.
+///
+/// [`deep_equal`]: crate::deep_equal
+/// [`deep_equal_loose`]: crate::deep_equal_loose
+/// [`deep_equal_strict`]: crate::deep_equal_strict
 #[derive(Debug, Clone)]
 pub enum Value {
     /// JavaScript `undefined`.
@@ -60,8 +75,12 @@ pub enum Value {
 
 /// The brand of a typed array.
 ///
-/// JavaScript's `whichTypedArray` returns the constructor name. Two typed
-/// arrays with different brands are never equal, even with identical bytes.
+/// Two typed arrays with different brands are never equal, even with identical
+/// bytes. The brand mirrors the constructor name JavaScript reports for the
+/// array.
+///
+/// This enum is exhaustive. It enumerates the typed array kinds the language
+/// defines, a fixed set, so a wildcard arm is not needed when matching it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypedArrayKind {
     /// `Int8Array`.
@@ -92,11 +111,20 @@ pub enum TypedArrayKind {
 ///
 /// Only the `strict` flag exists. The default is loose comparison, matching the
 /// default of `assert.deepEqual`.
+///
+/// Marked `#[non_exhaustive]` so new fields can be added without breaking
+/// callers. Build it through [`Options::LOOSE`], [`Options::STRICT`], or
+/// `Options::default()` rather than a struct literal.
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct Options {
-    /// When true, compare leaf values with `Object.is` semantics and compare
-    /// object prototypes. When false (the default), compare leaves with
-    /// coercive `==`.
+    /// When true, compare leaf values with `Object.is` semantics. When false
+    /// (the default), compare leaves with coercive `==`.
+    ///
+    /// Strict mode differs from loose mode in two ways: leaf comparison uses
+    /// SameValue instead of coercive `==`, and the top-level identity
+    /// short-circuit uses SameValue. So `NaN` equals `NaN` and `+0` differs
+    /// from `-0`.
     pub strict: bool,
 }
 
@@ -104,7 +132,6 @@ impl Options {
     /// Loose options. Leaf comparison uses coercive `==`.
     pub const LOOSE: Options = Options { strict: false };
 
-    /// Strict options. Leaf comparison uses `Object.is` and prototypes are
-    /// compared.
+    /// Strict options. Leaf comparison uses `Object.is` (SameValue).
     pub const STRICT: Options = Options { strict: true };
 }

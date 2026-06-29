@@ -10,15 +10,14 @@
 //! - Loose (the default) compares leaf primitives with coercive `==`. So
 //!   `"3"` and `3` are loosely equal, `null` and `undefined` are loosely equal,
 //!   and `+0` and `-0` are loosely equal.
-//! - Strict compares leaf primitives with `Object.is` and additionally compares
-//!   object prototypes. So `NaN` equals `NaN`, `+0` and `-0` differ, and `"3"`
-//!   and `3` differ.
+//! - Strict compares leaf primitives with `Object.is`. So `NaN` equals `NaN`,
+//!   `+0` and `-0` differ, and `"3"` and `3` differ.
 //!
 //! JavaScript erases type information at runtime, so the algorithm spends most
-//! of its effort recovering it: boxed primitives, arguments objects, typed
-//! array brands, `Map`/`Set` structure, `Date` timestamps, `RegExp` source and
-//! flags, and prototype chains. Rust keeps that information in the type system,
-//! so we model the value space with the [`Value`] enum and branch on it.
+//! of its effort recovering it: typed array brands, `Map`/`Set` structure,
+//! `Date` timestamps, and `RegExp` source and flags. Rust keeps that
+//! information in the type system, so we model the value space with the
+//! [`Value`] enum and branch on it.
 //!
 //! # Example
 //!
@@ -302,12 +301,12 @@ fn canonical_flags(flags: &str) -> String {
     chars.into_iter().collect()
 }
 
-/// Set comparison, matching `setEquiv`.
+/// Set comparison.
 ///
 /// Sets compare by membership, order independent. Primitive members use direct
 /// containment with loose coercion in loose mode. Object members need deep
-/// matching, always done loosely because of a quirk in the source algorithm:
-/// the strict flag is dropped when matching object members across sets.
+/// matching, always done loosely. The algorithm drops the strict flag when it
+/// matches object members across sets, so this path mirrors that.
 fn set_equiv(a: &Value, b: &Value, opts: Options) -> bool {
     let (raw_a, raw_b) = match (a, b) {
         (Value::Set(ea), Value::Set(eb)) => (ea, eb),
@@ -353,7 +352,7 @@ fn set_equiv(a: &Value, b: &Value, opts: Options) -> bool {
     for val in eb.iter() {
         if !leaf::is_falsy(val) && !leaf::is_leaf(val) {
             // Object member from b: find a deep match in leftover. The match is
-            // forced loose to mirror the source.
+            // forced loose, matching the strict-flag drop noted above.
             if !set_take_equal(ea, &mut leftover, val) {
                 return false;
             }
@@ -404,7 +403,7 @@ fn dedup_set(members: &[Value]) -> Vec<Value> {
 }
 
 /// Find a deep-equal match for `val` among the leftover a-members and consume
-/// it. Matching is loose, mirroring the source where the strict flag is lost.
+/// it. Matching is loose because the strict flag is dropped on this path.
 fn set_take_equal(ea: &[Value], leftover: &mut Vec<usize>, val: &Value) -> bool {
     if let Some(pos) = leftover
         .iter()

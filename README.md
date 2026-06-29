@@ -53,7 +53,6 @@ assert!(!deep_equal(&a, &b, Options::STRICT));
 - Typed array brand and byte equality, `ArrayBuffer` and `SharedArrayBuffer`
   byte equality.
 - Signed zero, NaN, and the infinities.
-- Cycle detection so mutually recursive structures terminate.
 
 ## Installation
 
