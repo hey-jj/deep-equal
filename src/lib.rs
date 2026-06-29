@@ -48,6 +48,7 @@ mod value;
 
 pub use value::{Options, TypedArrayKind, Value};
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Compare two values for deep equality.
@@ -239,32 +240,24 @@ fn obj_equiv(a: &Value, b: &Value, opts: Options, channel: &mut Channel) -> bool
         return ba == bb;
     }
 
-    // Own enumerable string keys: same count, same set, equal values per key.
+    // Own enumerable string keys: same count, same keys, equal values per key.
     // Arrays and plain objects flow through here. Their keys are the index
     // strings or property names.
+    //
+    // Each side is a sorted list of (key, value). The two lists walk in
+    // lockstep, so each key pairs with its value directly and no per-key lookup
+    // is needed.
     let ka = keys(a);
     let kb = keys(b);
     if ka.len() != kb.len() {
         return false;
     }
-    let mut sa: Vec<&String> = ka.iter().map(|(k, _)| k).collect();
-    let mut sb: Vec<&String> = kb.iter().map(|(k, _)| k).collect();
-    sa.sort();
-    sb.sort();
-    if sa != sb {
-        return false;
-    }
-    // Recurse per shared key.
-    for key in sa {
-        let va = get(a, key);
-        let vb = get(b, key);
-        match (va, vb) {
-            (Some(va), Some(vb)) => {
-                if !internal_deep_equal(va, vb, opts, channel) {
-                    return false;
-                }
-            }
-            _ => return false,
+    for ((key_a, va), (key_b, vb)) in ka.iter().zip(kb.iter()) {
+        if key_a != key_b {
+            return false;
+        }
+        if !internal_deep_equal(va, vb, opts, channel) {
+            return false;
         }
     }
 
@@ -317,29 +310,32 @@ fn is_array(v: &Value) -> bool {
     matches!(v, Value::Array(_))
 }
 
-/// The own enumerable string keys of an object or array.
+/// The own enumerable string keys of an object or array, sorted by key with
+/// each key paired to its value.
 ///
 /// Plain objects report their property names. Arrays report their index
 /// strings, `"0"`, `"1"`, and so on. Other kinds have no enumerable string
 /// keys here, so they compare structurally through their dedicated paths.
-fn keys(v: &Value) -> Vec<(String, &Value)> {
+///
+/// Object keys borrow from the entry. Array index strings are owned because
+/// they are built on the fly. Objects are sorted so two objects with the same
+/// keys in different orders compare equal in a single lockstep walk.
+fn keys(v: &Value) -> Vec<(Cow<'_, str>, &Value)> {
     match v {
-        Value::Object(entries) => entries.iter().map(|(k, val)| (k.clone(), val)).collect(),
+        Value::Object(entries) => {
+            let mut pairs: Vec<(Cow<'_, str>, &Value)> = entries
+                .iter()
+                .map(|(k, val)| (Cow::Borrowed(k.as_str()), val))
+                .collect();
+            pairs.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
+            pairs
+        }
         Value::Array(items) => items
             .iter()
             .enumerate()
-            .map(|(i, val)| (i.to_string(), val))
+            .map(|(i, val)| (Cow::Owned(i.to_string()), val))
             .collect(),
         _ => Vec::new(),
-    }
-}
-
-/// Look up a value by its string key.
-fn get<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
-    match v {
-        Value::Object(entries) => entries.iter().find(|(k, _)| k == key).map(|(_, val)| val),
-        Value::Array(items) => key.parse::<usize>().ok().and_then(|i| items.get(i)),
-        _ => None,
     }
 }
 
