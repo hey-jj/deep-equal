@@ -252,6 +252,20 @@ fn sets_loose_object_members() {
 }
 
 #[test]
+fn sets_strict_object_members_match_strictly() {
+    // The only members are objects that are loosely but not strictly equal, so
+    // no primitive mismatch short-circuits strict mode. Strict must compare the
+    // object members strictly and report the Sets unequal.
+    check_both(
+        "Sets whose object members differ loosely-but-not-strictly",
+        &set(vec![obj(vec![("a", n(1.0))])]),
+        &set(vec![obj(vec![("a", s("1"))])]),
+        true,
+        false,
+    );
+}
+
+#[test]
 fn sets_primitive_coercion() {
     check_both(
         "more primitive comparisons",

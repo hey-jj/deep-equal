@@ -305,8 +305,7 @@ fn canonical_flags(flags: &str) -> String {
 ///
 /// Sets compare by membership, order independent. Primitive members use direct
 /// containment with loose coercion in loose mode. Object members need deep
-/// matching, always done loosely. The algorithm drops the strict flag when it
-/// matches object members across sets, so this path mirrors that.
+/// matching, which honors the active mode, so strict matches strictly.
 fn set_equiv(a: &Value, b: &Value, opts: Options) -> bool {
     let (raw_a, raw_b) = match (a, b) {
         (Value::Set(ea), Value::Set(eb)) => (ea, eb),
@@ -351,12 +350,15 @@ fn set_equiv(a: &Value, b: &Value, opts: Options) -> bool {
 
     for val in eb.iter() {
         if !leaf::is_falsy(val) && !leaf::is_leaf(val) {
-            // Object member from b: find a deep match in leftover. The match is
-            // forced loose, matching the strict-flag drop noted above.
-            if !set_take_equal(ea, &mut leftover, val) {
+            // Object member from b: find a deep match in leftover, honoring the
+            // active mode.
+            if !set_take_equal(ea, &mut leftover, val, opts) {
                 return false;
             }
-        } else if !opts.strict && !set_has(ea, val) && !set_take_equal(ea, &mut leftover, val) {
+        } else if !opts.strict
+            && !set_has(ea, val)
+            && !set_take_equal(ea, &mut leftover, val, Options::LOOSE)
+        {
             return false;
         }
     }
@@ -403,11 +405,11 @@ fn dedup_set(members: &[Value]) -> Vec<Value> {
 }
 
 /// Find a deep-equal match for `val` among the leftover a-members and consume
-/// it. Matching is loose because the strict flag is dropped on this path.
-fn set_take_equal(ea: &[Value], leftover: &mut Vec<usize>, val: &Value) -> bool {
+/// it. Object members honor the active mode, so strict matches strictly.
+fn set_take_equal(ea: &[Value], leftover: &mut Vec<usize>, val: &Value, opts: Options) -> bool {
     if let Some(pos) = leftover
         .iter()
-        .position(|&i| internal_deep_equal(&ea[i], val, Options::LOOSE))
+        .position(|&i| internal_deep_equal(&ea[i], val, opts))
     {
         leftover.remove(pos);
         true
@@ -576,17 +578,12 @@ fn map_might_have_loose_prim(
     match find_loose_matching_primitives(prim) {
         LoosePrim::Direct(v) => v,
         LoosePrim::Alt(alt) => {
-            // Look up the entry under the nullish alternate key.
-            let cur_b = map_get(b, &alt);
-            let ok_b = match cur_b {
-                Some(v) => internal_deep_equal(item, v, Options::LOOSE),
+            // The nullish alternate key loosely matches only when b holds it,
+            // a does not, and the values agree.
+            match map_get(b, &alt) {
+                Some(v) => internal_deep_equal(item, v, Options::LOOSE) && !map_has(a, &alt),
                 None => false,
-            };
-            if !ok_b {
-                return false;
             }
-            let cur = cur_b.expect("cur_b is Some after ok_b");
-            !map_has(a, &alt) && internal_deep_equal(item, cur, Options::LOOSE)
         }
     }
 }
