@@ -95,6 +95,17 @@ fn infinity_strings() {
 }
 
 #[test]
+fn float_special_words_reject() {
+    // Number() only accepts the exact "Infinity" spelling. The lowercase and
+    // word forms that Rust's float parser would accept coerce to NaN, so they
+    // do not equal an infinity.
+    assert!(!loose(&s("inf"), &n(f64::INFINITY)));
+    assert!(!loose(&s("infinity"), &n(f64::INFINITY)));
+    assert!(!loose(&s("INFINITY"), &n(f64::INFINITY)));
+    assert!(!loose(&s("-inf"), &n(f64::NEG_INFINITY)));
+}
+
+#[test]
 fn radix_prefixes_and_sign() {
     // Octal, binary, leading plus, and exponent all parse like Number(string).
     assert!(loose(&s("0o17"), &n(15.0)));

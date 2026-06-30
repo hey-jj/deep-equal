@@ -116,9 +116,15 @@ pub fn string_to_number(s: &str) -> f64 {
         return parse_radix(rest, 2);
     }
 
-    // Rust's f64 parser accepts the same decimal forms as JavaScript here, with
-    // the exception of a leading `+`, which JavaScript allows.
+    // JavaScript allows a leading `+` that Rust's parser rejects, so strip it.
+    // Rust's parser also accepts `inf` and `infinity` in any case as infinity,
+    // but `Number()` reads only the exact "Infinity" handled above, so reject
+    // the word forms before parsing the decimal.
     let decimal = t.strip_prefix('+').unwrap_or(t);
+    let unsigned = decimal.strip_prefix('-').unwrap_or(decimal);
+    if unsigned.eq_ignore_ascii_case("inf") || unsigned.eq_ignore_ascii_case("infinity") {
+        return f64::NAN;
+    }
     decimal.parse::<f64>().unwrap_or(f64::NAN)
 }
 
