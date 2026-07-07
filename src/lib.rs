@@ -47,8 +47,6 @@ mod value;
 
 pub use value::{Options, TypedArrayKind, Value};
 
-use std::borrow::Cow;
-
 /// Compare two values for deep equality.
 ///
 /// Returns `true` when `a` and `b` are deeply equivalent under the given
@@ -128,11 +126,6 @@ fn obj_equiv(a: &Value, b: &Value, opts: Options) -> bool {
         return false;
     }
 
-    // Array class must match.
-    if is_array(a) != is_array(b) {
-        return false;
-    }
-
     // RegExp: source and canonical flags must match.
     if let (
         Value::Regex {
@@ -154,20 +147,9 @@ fn obj_equiv(a: &Value, b: &Value, opts: Options) -> bool {
         return ta == tb;
     }
 
-    // Typed arrays: brand then length then strict element compare. Early
-    // return, no key loop.
-    if let (
-        Value::TypedArray {
-            kind: ka,
-            bytes: ba,
-        },
-        Value::TypedArray {
-            kind: kb,
-            bytes: bb,
-        },
-    ) = (a, b)
-    {
-        return ka == kb && ba == bb;
+    // Typed arrays: brand then bytes. Early return, no key loop.
+    if let (Value::TypedArray { bytes: ba, .. }, Value::TypedArray { bytes: bb, .. }) = (a, b) {
+        return ba == bb;
     }
 
     // ArrayBuffer: byte length then byte contents. Early return.
@@ -180,9 +162,17 @@ fn obj_equiv(a: &Value, b: &Value, opts: Options) -> bool {
         return ba == bb;
     }
 
+    // Arrays: equal length and equal items in order. Early return, no key loop.
+    if let (Value::Array(ia), Value::Array(ib)) = (a, b) {
+        return ia.len() == ib.len()
+            && ia
+                .iter()
+                .zip(ib.iter())
+                .all(|(va, vb)| internal_deep_equal(va, vb, opts));
+    }
+
     // Own enumerable string keys: same count, same keys, equal values per key.
-    // Arrays and plain objects flow through here. Their keys are the index
-    // strings or property names.
+    // Plain objects flow through here. Their keys are property names.
     //
     // Each side is a sorted list of (key, value). The two lists walk in
     // lockstep, so each key pairs with its value directly and no per-key lookup
@@ -245,35 +235,25 @@ fn brand(v: &Value) -> &'static str {
     }
 }
 
-/// True when the value is an array, matching `Array.isArray`.
-fn is_array(v: &Value) -> bool {
-    matches!(v, Value::Array(_))
-}
-
-/// The own enumerable string keys of an object or array, sorted by key with
+/// The own enumerable string keys of an object, sorted by key with
 /// each key paired to its value.
 ///
-/// Plain objects report their property names. Arrays report their index
-/// strings, `"0"`, `"1"`, and so on. Other kinds have no enumerable string
-/// keys here, so they compare structurally through their dedicated paths.
+/// Plain objects report their property names. Other kinds have no enumerable
+/// string keys here, so they compare structurally through their dedicated paths.
 ///
-/// Object keys borrow from the entry. Array index strings are owned because
-/// they are built on the fly. Duplicate object keys collapse to the last value,
-/// matching how JavaScript builds an object from a property list. Objects are
-/// sorted so two objects with the same keys in different orders compare equal in
-/// a single lockstep walk.
-fn keys(v: &Value) -> Vec<(Cow<'_, str>, &Value)> {
+/// Duplicate object keys collapse to the last value, matching how JavaScript
+/// builds an object from a property list. Objects are sorted so two objects with
+/// the same keys in different orders compare equal in a single lockstep walk.
+fn keys(v: &Value) -> Vec<(&str, &Value)> {
     match v {
         Value::Object(entries) => {
             // Sort by key first. A stable sort keeps insertion order within a
             // run of equal keys, so the final entry in each run is the last
             // write. Then dedup adjacent keys keeping that last entry.
-            let mut pairs: Vec<(Cow<'_, str>, &Value)> = entries
-                .iter()
-                .map(|(k, val)| (Cow::Borrowed(k.as_str()), val))
-                .collect();
-            pairs.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
-            let mut out: Vec<(Cow<'_, str>, &Value)> = Vec::with_capacity(pairs.len());
+            let mut pairs: Vec<(&str, &Value)> =
+                entries.iter().map(|(k, val)| (k.as_str(), val)).collect();
+            pairs.sort_by_key(|(key, _)| *key);
+            let mut out: Vec<(&str, &Value)> = Vec::with_capacity(pairs.len());
             for (key, val) in pairs {
                 match out.last_mut() {
                     Some(last) if last.0 == key => last.1 = val,
@@ -282,11 +262,6 @@ fn keys(v: &Value) -> Vec<(Cow<'_, str>, &Value)> {
             }
             out
         }
-        Value::Array(items) => items
-            .iter()
-            .enumerate()
-            .map(|(i, val)| (Cow::Owned(i.to_string()), val))
-            .collect(),
         _ => Vec::new(),
     }
 }
@@ -369,7 +344,7 @@ fn set_equiv(a: &Value, b: &Value, opts: Options) -> bool {
 /// Whether a set contains a primitive member, using SameValueZero containment.
 /// JavaScript `Set.prototype.has` treats `NaN` as present and `+0`/`-0` as the
 /// same. Strictness does not change containment here.
-fn set_has(members: &[Value], val: &Value) -> bool {
+fn set_has(members: &[&Value], val: &Value) -> bool {
     members.iter().any(|m| set_same(m, val))
 }
 
@@ -389,8 +364,8 @@ fn set_same(a: &Value, b: &Value) -> bool {
 /// once. Object members are kept as is. A real Set keys them by reference, which
 /// this model has no way to express, so two structurally equal objects stay as
 /// two members.
-fn dedup_set(members: &[Value]) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::with_capacity(members.len());
+fn dedup_set(members: &[Value]) -> Vec<&Value> {
+    let mut out: Vec<&Value> = Vec::with_capacity(members.len());
     for m in members {
         let already_kept = leaf::is_leaf(m)
             && out
@@ -399,17 +374,17 @@ fn dedup_set(members: &[Value]) -> Vec<Value> {
         if already_kept {
             continue;
         }
-        out.push(m.clone());
+        out.push(m);
     }
     out
 }
 
 /// Find a deep-equal match for `val` among the leftover a-members and consume
 /// it. Object members honor the active mode, so strict matches strictly.
-fn set_take_equal(ea: &[Value], leftover: &mut Vec<usize>, val: &Value, opts: Options) -> bool {
+fn set_take_equal(ea: &[&Value], leftover: &mut Vec<usize>, val: &Value, opts: Options) -> bool {
     if let Some(pos) = leftover
         .iter()
-        .position(|&i| internal_deep_equal(&ea[i], val, opts))
+        .position(|&i| internal_deep_equal(ea[i], val, opts))
     {
         leftover.remove(pos);
         true
@@ -451,7 +426,7 @@ fn find_loose_matching_primitives(prim: &Value) -> LoosePrim {
 
 /// Whether a set might hold a loose match for a primitive in b but not a,
 /// matching `setMightHaveLoosePrim`.
-fn set_might_have_loose_prim(a: &[Value], b: &[Value], prim: &Value) -> bool {
+fn set_might_have_loose_prim(a: &[&Value], b: &[&Value], prim: &Value) -> bool {
     match find_loose_matching_primitives(prim) {
         LoosePrim::Direct(v) => v,
         LoosePrim::Alt(alt) => set_has(b, &alt) && !set_has(a, &alt),
@@ -536,42 +511,42 @@ fn map_equiv(a: &Value, b: &Value, opts: Options) -> bool {
 /// overwrites the value. Object keys are kept as is because a Map keys them by
 /// reference, which this model has no way to express, so two structurally equal
 /// objects stay as two entries.
-fn dedup_map(entries: &[(Value, Value)]) -> Vec<(Value, Value)> {
-    let mut out: Vec<(Value, Value)> = Vec::with_capacity(entries.len());
+fn dedup_map(entries: &[(Value, Value)]) -> Vec<(&Value, &Value)> {
+    let mut out: Vec<(&Value, &Value)> = Vec::with_capacity(entries.len());
     for (key, val) in entries {
         if leaf::is_leaf(key) {
             if let Some(slot) = out
                 .iter_mut()
                 .find(|(k, _)| leaf::is_leaf(k) && set_same(k, key))
             {
-                slot.1 = val.clone();
+                slot.1 = val;
                 continue;
             }
         }
-        out.push((key.clone(), val.clone()));
+        out.push((key, val));
     }
     out
 }
 
 /// Look up a map value by key using SameValueZero key matching, matching
 /// `Map.prototype.get`.
-fn map_get<'a>(entries: &'a [(Value, Value)], key: &Value) -> Option<&'a Value> {
+fn map_get<'a>(entries: &'a [(&'a Value, &'a Value)], key: &Value) -> Option<&'a Value> {
     entries
         .iter()
         .find(|(k, _)| set_same(k, key))
-        .map(|(_, v)| v)
+        .map(|(_, v)| *v)
 }
 
 /// Whether a map has a key using SameValueZero matching.
-fn map_has(entries: &[(Value, Value)], key: &Value) -> bool {
+fn map_has(entries: &[(&Value, &Value)], key: &Value) -> bool {
     entries.iter().any(|(k, _)| set_same(k, key))
 }
 
 /// Whether a map might hold a loose match for a primitive key, matching
 /// `mapMightHaveLoosePrim`.
 fn map_might_have_loose_prim(
-    a: &[(Value, Value)],
-    b: &[(Value, Value)],
+    a: &[(&Value, &Value)],
+    b: &[(&Value, &Value)],
     prim: &Value,
     item: &Value,
 ) -> bool {
@@ -591,7 +566,7 @@ fn map_might_have_loose_prim(
 /// Find and consume a leftover object-keyed entry whose key and value both
 /// deep-match, matching `mapHasEqualEntry`.
 fn map_take_equal_entry(
-    ea: &[(Value, Value)],
+    ea: &[(&Value, &Value)],
     leftover: &mut Vec<usize>,
     key: &Value,
     item2: &Value,
