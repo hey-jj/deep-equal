@@ -118,6 +118,14 @@ fn radix_prefixes_and_sign() {
 }
 
 #[test]
+fn radix_string_rounds_once() {
+    assert!(loose(
+        &s("0b1101001110110001101010011100111011101101101010010110011"),
+        &n(29_793_281_482_609_844.0),
+    ));
+}
+
+#[test]
 fn non_numeric_strings_reject() {
     // Underscores are not part of the numeric grammar, so this is NaN.
     assert!(!loose(&s("1_000"), &n(1000.0)));

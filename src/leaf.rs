@@ -133,14 +133,59 @@ fn parse_radix(digits: &str, radix: u32) -> f64 {
     if digits.is_empty() {
         return f64::NAN;
     }
-    let mut acc: f64 = 0.0;
+    let bit_width = radix.trailing_zeros();
+    let mut bits: Vec<bool> = Vec::new();
     for ch in digits.chars() {
         match ch.to_digit(radix) {
-            Some(d) => acc = acc * f64::from(radix) + f64::from(d),
+            Some(d) => {
+                for shift in (0..bit_width).rev() {
+                    let bit = (d & (1 << shift)) != 0;
+                    if bit || !bits.is_empty() {
+                        bits.push(bit);
+                    }
+                }
+            }
             None => return f64::NAN,
         }
     }
-    acc
+    integer_bits_to_f64(&bits)
+}
+
+/// Convert exact positive integer bits to a number with one final rounding.
+fn integer_bits_to_f64(bits: &[bool]) -> f64 {
+    if bits.is_empty() {
+        return 0.0;
+    }
+
+    if bits.len() <= f64::MANTISSA_DIGITS as usize {
+        return bits
+            .iter()
+            .fold(0_u64, |acc, bit| (acc << 1) | u64::from(*bit)) as f64;
+    }
+
+    let mut exponent = bits.len() as i32 - 1;
+    let mut significand = bits[..f64::MANTISSA_DIGITS as usize]
+        .iter()
+        .fold(0_u64, |acc, bit| (acc << 1) | u64::from(*bit));
+    let guard = bits[f64::MANTISSA_DIGITS as usize];
+    let sticky = bits[f64::MANTISSA_DIGITS as usize + 1..]
+        .iter()
+        .any(|bit| *bit);
+    if guard && (sticky || significand % 2 == 1) {
+        significand += 1;
+        if significand == (1_u64 << f64::MANTISSA_DIGITS) {
+            significand >>= 1;
+            exponent += 1;
+        }
+    }
+
+    if exponent > 1023 {
+        return f64::INFINITY;
+    }
+
+    let biased = (exponent + 1023) as u64;
+    let fraction = significand - (1_u64 << (f64::MANTISSA_DIGITS - 1));
+    f64::from_bits((biased << 52) | fraction)
 }
 
 /// JavaScript whitespace and line terminators that `Number()` trims.
